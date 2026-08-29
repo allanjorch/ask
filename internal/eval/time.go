@@ -1,18 +1,19 @@
 package eval
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type timeQuery struct {
-	when      time.Time // wall time in From, or now if Now
-	now       bool
-	from      *time.Location
-	fromLabel string
-	to        *time.Location
-	toLabel   string
+	when       time.Time // wall clock, ignored if now
+	now        bool
+	structured bool // "in X" / "9am PT" — time even if the place is unknown
+	fromName   string
+	toName     string
 }
 
 func parseTimeQuery(body string) (timeQuery, bool) {
@@ -23,28 +24,26 @@ func parseTimeQuery(body string) (timeQuery, bool) {
 	low := strings.ToLower(s)
 
 	if rest, ok := stripPrefix(low, s, "now in "); ok {
-		loc, label, ok := lookupZone(rest)
-		if !ok {
+		if !looksLikePlace(rest) {
 			return timeQuery{}, false
 		}
-		return timeQuery{now: true, to: loc, toLabel: label}, true
+		return timeQuery{now: true, structured: true, toName: rest}, true
 	}
 	if rest, ok := stripPrefix(low, s, "in "); ok {
-		loc, label, ok := lookupZone(rest)
-		if !ok {
+		if !looksLikePlace(rest) {
 			return timeQuery{}, false
 		}
-		return timeQuery{now: true, to: loc, toLabel: label}, true
+		return timeQuery{now: true, structured: true, toName: rest}, true
 	}
 
-	// "<time> <from> [to <to>]"
 	when, rest, ok := takeClock(s)
 	if !ok {
-		// bare place: current time there
-		if loc, label, ok := lookupZone(s); ok {
-			return timeQuery{now: true, to: loc, toLabel: label}, true
+		if !looksLikePlace(s) {
+			return timeQuery{}, false
 		}
-		return timeQuery{}, false
+		// Bare place: current time there. Try-all only treats this as time
+		// when the nickname is already known; t/time still resolves via geocode.
+		return timeQuery{now: true, toName: s}, true
 	}
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
@@ -55,19 +54,31 @@ func parseTimeQuery(body string) (timeQuery, bool) {
 		fromPart = strings.TrimSpace(rest[:i])
 		toPart = strings.TrimSpace(rest[i+4:])
 	}
-	from, fromLabel, ok := lookupZone(fromPart)
-	if !ok {
+	if !looksLikePlace(fromPart) {
 		return timeQuery{}, false
 	}
-	q := timeQuery{when: when, from: from, fromLabel: fromLabel}
-	if toPart != "" {
-		to, toLabel, ok := lookupZone(toPart)
-		if !ok {
-			return timeQuery{}, false
-		}
-		q.to, q.toLabel = to, toLabel
+	if toPart != "" && !looksLikePlace(toPart) {
+		return timeQuery{}, false
 	}
-	return q, true
+	return timeQuery{when: when, structured: true, fromName: fromPart, toName: toPart}, true
+}
+
+func looksLikePlace(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	hasLetter := false
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r):
+			hasLetter = true
+		case unicode.IsDigit(r), r == ' ', r == '-', r == '_', r == '/', r == '\'', r == '.':
+		default:
+			return false
+		}
+	}
+	return hasLetter
 }
 
 func stripPrefix(low, orig, prefix string) (string, bool) {
@@ -134,7 +145,7 @@ func takeClockManual(s string) (time.Time, string, bool) {
 	return t, rest, rest != "" || ampm != ""
 }
 
-func (e *Engine) evalTime(body string) []Result {
+func (e *Engine) evalTime(ctx context.Context, body string) []Result {
 	q, ok := parseTimeQuery(body)
 	if !ok {
 		return nil
@@ -143,40 +154,42 @@ func (e *Engine) evalTime(body string) []Result {
 	local := e.zone()
 
 	if q.now {
-		dest := q.to
-		if dest == nil {
-			dest = local
+		dest, label, ok := e.resolveZone(ctx, q.toName)
+		if !ok {
+			return nil
 		}
 		t := now.In(dest)
-		label := q.toLabel
 		if label == "" {
 			label = t.Format("MST")
 		}
 		title := formatWall(t, true)
-		sub := label
 		return []Result{{
 			Kind:     KindTime,
 			Title:    title,
-			Subtitle: sub,
+			Subtitle: label,
 			Copy:     title,
 			Rank:     85,
 		}}
 	}
 
-	from := q.from
-	to := q.to
-	toLabel := q.toLabel
-	if to == nil {
-		to = local
-		toLabel = localAbbr(now.In(local))
+	from, fromLabel, ok := e.resolveZone(ctx, q.fromName)
+	if !ok {
+		return nil
 	}
-	// Build a timestamp on today's date in the source zone.
+	to, toLabel := local, localAbbr(now.In(local))
+	if q.toName != "" {
+		var ok bool
+		to, toLabel, ok = e.resolveZone(ctx, q.toName)
+		if !ok {
+			return nil
+		}
+	}
 	srcNow := now.In(from)
 	when := time.Date(srcNow.Year(), srcNow.Month(), srcNow.Day(),
 		q.when.Hour(), q.when.Minute(), 0, 0, from)
 	out := when.In(to)
-	title := formatWall(out, q.when.Hour() < 13 && /* 12h if input was 12h-ish */ true)
-	sub := fmt.Sprintf("%s %s → %s", formatWall(when, true), q.fromLabel, toLabel)
+	title := formatWall(out, true)
+	sub := fmt.Sprintf("%s %s → %s", formatWall(when, true), fromLabel, toLabel)
 	return []Result{{
 		Kind:     KindTime,
 		Title:    title,
@@ -184,6 +197,29 @@ func (e *Engine) evalTime(body string) []Result {
 		Copy:     title,
 		Rank:     85,
 	}}
+}
+
+func (e *Engine) resolveZone(ctx context.Context, name string) (*time.Location, string, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, "", false
+	}
+	if loc, label, ok := lookupZone(name); ok {
+		return loc, label, true
+	}
+	g, err := e.geocode(ctx, name)
+	if err != nil || g.Timezone == "" {
+		return nil, "", false
+	}
+	loc, err := time.LoadLocation(g.Timezone)
+	if err != nil {
+		return nil, "", false
+	}
+	label := g.Label
+	if label == "" {
+		label = displayCity(name)
+	}
+	return loc, label, true
 }
 
 func formatWall(t time.Time, twelve bool) string {

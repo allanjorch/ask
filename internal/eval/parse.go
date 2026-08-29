@@ -97,11 +97,13 @@ func NeedsNetwork(raw string) bool {
 			return true
 		case KindConvert:
 			return looksLikeCurrency(q.Body)
+		case KindTime:
+			return timeNeedsNetwork(q.Body)
 		default:
 			return false
 		}
 	}
-	return looksLikeTicker(q.Body) || looksLikeDefine(q.Body) || looksLikeCurrency(q.Body)
+	return looksLikeTicker(q.Body) || looksLikeDefine(q.Body) || looksLikeCurrency(q.Body) || timeNeedsNetwork(q.Body)
 }
 
 func looksLikeMath(body string) bool {
@@ -145,8 +147,31 @@ func looksLikeTicker(body string) bool {
 }
 
 func looksLikeTime(body string) bool {
-	_, ok := parseTimeQuery(body)
-	return ok
+	q, ok := parseTimeQuery(body)
+	if !ok {
+		return false
+	}
+	if q.structured {
+		return true
+	}
+	_, _, known := lookupZone(q.toName)
+	return known
+}
+
+func timeNeedsNetwork(body string) bool {
+	q, ok := parseTimeQuery(body)
+	if !ok {
+		return false
+	}
+	return zoneNeedsNetwork(q.fromName) || zoneNeedsNetwork(q.toName)
+}
+
+func zoneNeedsNetwork(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	_, _, ok := lookupZone(name)
+	return !ok
 }
 
 func looksLikeDefine(body string) bool {

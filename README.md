@@ -29,6 +29,8 @@ w Tokyo
 
 `NVDA 200` is two hundred shares at last price. `!dr.dk` opens that site in Brave. `!omarchy` searches Brave. `!` alone launches the browser.
 
+City nicknames (`Tokyo`, `PT`) are answered offline. An unknown place falls through to Open-Meteo’s geocoder, the same one weather uses, so `time in Reykjavik` still works.
+
 ## Operators
 
 With an empty box, Ask shows these as a faint hint. You do not need them on the happy path. They are filters for when several engines could claim the same prompt.

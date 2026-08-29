@@ -190,7 +190,7 @@ func TestTimePTToLocal(t *testing.T) {
 	if !ok {
 		t.Fatal("parse 9am PT")
 	}
-	if q.from == nil {
+	if q.fromName == "" {
 		t.Fatal("missing from zone")
 	}
 	res := e.Evaluate(context.Background(), "9am PT")
@@ -266,5 +266,52 @@ func TestLooksLike(t *testing.T) {
 	}
 	if !looksLikeTime("9am PT") || !looksLikeTime("in Tokyo") {
 		t.Fatal("time")
+	}
+	if looksLikeTime("ephemeral") || looksLikeTime("2+2") {
+		t.Fatal("time should not claim definitions or math")
+	}
+	if !looksLikeTime("in Reykjavik") {
+		t.Fatal("unknown city with in-prefix is still a time query")
+	}
+}
+
+func TestTimeGeocodeFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"results": []any{
+				map[string]any{
+					"name":      "Reykjavik",
+					"country":   "Iceland",
+					"latitude":  64.13,
+					"longitude": -21.9,
+					"timezone":  "Atlantic/Reykjavik",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+	e := New()
+	fixed := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	e.Now = func() time.Time { return fixed }
+	e.GeoURL = func(place string) string { return srv.URL }
+	if NeedsNetwork("time in Reykjavik") != true {
+		t.Fatal("unknown city should debounce for geocode")
+	}
+	if NeedsNetwork("time in Tokyo") {
+		t.Fatal("known city should stay offline")
+	}
+	res := e.Evaluate(context.Background(), "time in Reykjavik")
+	if len(res) != 1 {
+		t.Fatalf("got %+v", res)
+	}
+	if res[0].Kind != KindTime {
+		t.Errorf("kind %s", res[0].Kind)
+	}
+	// UTC 12:00 is 12:00 in Iceland (no DST).
+	if !strings.Contains(res[0].Title, "12:00 PM") && !strings.Contains(res[0].Title, "12:00") {
+		t.Errorf("reykjavik time %q", res[0].Title)
+	}
+	if !strings.Contains(res[0].Subtitle, "Reykjavik") {
+		t.Errorf("subtitle %q", res[0].Subtitle)
 	}
 }

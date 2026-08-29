@@ -24,6 +24,7 @@ type Engine struct {
 	mu     sync.Mutex
 	fx     map[string]fxCache
 	quotes map[string]quoteCache
+	geo    map[string]geoCache
 }
 
 func New() *Engine {
@@ -80,7 +81,7 @@ func (e *Engine) Evaluate(ctx context.Context, raw string) []Result {
 	run(KindBrowse, false, func() []Result { return evalBrowse(q.Body) })
 	run(KindMath, looksLikeMath(q.Body), func() []Result { return evalMath(q.Body) })
 	run(KindConvert, looksLikeConvert(q.Body), func() []Result { return e.evalConvert(ctx, q.Body, looseConvert) })
-	run(KindTime, looksLikeTime(q.Body), func() []Result { return e.evalTime(q.Body) })
+	run(KindTime, looksLikeTime(q.Body), func() []Result { return e.evalTime(ctx, q.Body) })
 	run(KindTicker, looksLikeTicker(q.Body), func() []Result { return e.evalTicker(ctx, q.Body) })
 	run(KindDefine, looksLikeDefine(q.Body), func() []Result { return e.evalDefine(ctx, q.Body) })
 	run(KindWeather, q.Filter == KindWeather, func() []Result { return e.evalWeather(ctx, q.Body) })

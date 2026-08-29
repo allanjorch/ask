@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 func (e *Engine) evalWeather(ctx context.Context, body string) []Result {
@@ -19,15 +20,15 @@ func (e *Engine) evalWeather(ctx context.Context, body string) []Result {
 	if place == "" {
 		return nil
 	}
-	lat, lon, label, err := e.geocode(ctx, place)
+	g, err := e.geocode(ctx, place)
 	if err != nil {
 		return nil
 	}
-	w, err := e.forecast(ctx, lat, lon)
+	w, err := e.forecast(ctx, g.Lat, g.Lon)
 	if err != nil {
 		return nil
 	}
-	title := fmt.Sprintf("%s  %s°C  %s", label, formatNumber(w.temp), w.condition)
+	title := fmt.Sprintf("%s  %s°C  %s", g.Label, formatNumber(w.temp), w.condition)
 	sub := fmt.Sprintf("H %s° / L %s°", formatNumber(w.high), formatNumber(w.low))
 	if w.wind != 0 {
 		sub += fmt.Sprintf("  ·  %s km/h", formatNumber(w.wind))
@@ -41,24 +42,46 @@ func (e *Engine) evalWeather(ctx context.Context, body string) []Result {
 	}}
 }
 
-func (e *Engine) geocode(ctx context.Context, place string) (lat, lon float64, label string, err error) {
+type geoResult struct {
+	Lat, Lon float64
+	Label    string
+	Timezone string
+}
+
+type geoCache struct {
+	res     geoResult
+	fetched time.Time
+}
+
+func (e *Engine) geocode(ctx context.Context, place string) (geoResult, error) {
+	key := strings.ToLower(strings.TrimSpace(place))
+	e.mu.Lock()
+	if e.geo == nil {
+		e.geo = map[string]geoCache{}
+	}
+	if c, ok := e.geo[key]; ok && time.Since(c.fetched) < time.Hour {
+		e.mu.Unlock()
+		return c.res, nil
+	}
+	e.mu.Unlock()
+
 	u := e.geoURL(place)
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
-		return 0, 0, "", err
+		return geoResult{}, err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	res, err := e.http().Do(req)
 	if err != nil {
-		return 0, 0, "", err
+		return geoResult{}, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return 0, 0, "", fmt.Errorf("geocode %s", res.Status)
+		return geoResult{}, fmt.Errorf("geocode %s", res.Status)
 	}
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
-		return 0, 0, "", err
+		return geoResult{}, err
 	}
 	var parsed struct {
 		Results []struct {
@@ -67,20 +90,25 @@ func (e *Engine) geocode(ctx context.Context, place string) (lat, lon float64, l
 			Admin1    string  `json:"admin1"`
 			Latitude  float64 `json:"latitude"`
 			Longitude float64 `json:"longitude"`
+			Timezone  string  `json:"timezone"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return 0, 0, "", err
+		return geoResult{}, err
 	}
 	if len(parsed.Results) == 0 {
-		return 0, 0, "", fmt.Errorf("no place")
+		return geoResult{}, fmt.Errorf("no place")
 	}
 	r := parsed.Results[0]
-	label = r.Name
+	label := r.Name
 	if r.Country != "" {
 		label += ", " + r.Country
 	}
-	return r.Latitude, r.Longitude, label, nil
+	out := geoResult{Lat: r.Latitude, Lon: r.Longitude, Label: label, Timezone: r.Timezone}
+	e.mu.Lock()
+	e.geo[key] = geoCache{res: out, fetched: time.Now()}
+	e.mu.Unlock()
+	return out, nil
 }
 
 func (e *Engine) geoURL(place string) string {
