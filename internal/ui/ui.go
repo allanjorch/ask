@@ -5,6 +5,7 @@ import (
 	"image"
 	"image/color"
 	"io"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -45,13 +46,14 @@ type state struct {
 	editor widget.Editor
 	list   widget.List
 
-	gen      uint64
-	cancel   context.CancelFunc
-	results  []eval.Result
-	selected int
-	query    string
-	focused  bool
-	lastH    unit.Dp
+	gen             uint64
+	cancel          context.CancelFunc
+	results         []eval.Result
+	selected        int
+	query           string
+	focused         bool
+	lastH           unit.Dp
+	closeAfterFrame bool
 }
 
 // Run opens the Ask window and blocks until it is closed.
@@ -90,6 +92,9 @@ func Run() error {
 			gtx := app.NewContext(&ops, e)
 			s.frame(gtx)
 			e.Frame(gtx.Ops)
+			if s.closeAfterFrame {
+				s.close()
+			}
 		}
 	}
 }
@@ -349,12 +354,27 @@ func (s *state) commit(gtx layout.Context) {
 	}
 	text := r.CopyText()
 	if text != "" {
-		gtx.Execute(clipboard.WriteCmd{
-			Type: "application/text",
-			Data: io.NopCloser(strings.NewReader(text)),
-		})
+		// Wayland clipboard is offered by the source process. Closing the
+		// window in the same breath drops the offer, so hand the bytes to
+		// wl-copy (which stays around) and only then dismiss.
+		if !systemCopy(text) {
+			gtx.Execute(clipboard.WriteCmd{
+				Type: "application/text",
+				Data: io.NopCloser(strings.NewReader(text)),
+			})
+		}
 	}
-	s.close()
+	s.closeAfterFrame = true
+}
+
+func systemCopy(text string) bool {
+	path, err := exec.LookPath("wl-copy")
+	if err != nil {
+		return false
+	}
+	cmd := exec.Command(path, "--trim-newline")
+	cmd.Stdin = strings.NewReader(text)
+	return cmd.Run() == nil
 }
 
 func (s *state) close() {

@@ -160,6 +160,50 @@ func TestTickerHTTP(t *testing.T) {
 	}
 }
 
+func TestCryptoPrefersUSD(t *testing.T) {
+	if got := quoteSymbols("BTC"); len(got) < 1 || got[0] != "BTC-USD" {
+		t.Fatalf("BTC → %v, want BTC-USD first", got)
+	}
+	if got := quoteSymbols("ETH"); got[0] != "ETH-USD" {
+		t.Fatalf("ETH → %v", got)
+	}
+	if got := quoteSymbols("NVDA"); len(got) != 1 || got[0] != "NVDA" {
+		t.Fatalf("NVDA → %v", got)
+	}
+
+	var requested []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"chart": map[string]any{
+				"result": []any{
+					map[string]any{
+						"meta": map[string]any{
+							"symbol":             "BTC-USD",
+							"shortName":          "Bitcoin USD",
+							"currency":           "USD",
+							"regularMarketPrice": 80000.0,
+							"chartPreviousClose": 79000.0,
+						},
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+	e := New()
+	e.QuoteURL = func(symbol string) string {
+		requested = append(requested, symbol)
+		return srv.URL
+	}
+	res := e.Evaluate(context.Background(), "BTC")
+	if len(requested) == 0 || requested[0] != "BTC-USD" {
+		t.Fatalf("requested %v, want BTC-USD first", requested)
+	}
+	if len(res) != 1 || !strings.Contains(res[0].Subtitle, "Bitcoin") {
+		t.Fatalf("result %+v", res)
+	}
+}
+
 func TestTimeTokyo(t *testing.T) {
 	e := New()
 	fixed := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)

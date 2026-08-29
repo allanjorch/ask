@@ -116,15 +116,24 @@ var cryptoUSD = map[string]bool{
 	"SHIB": true, "BNB": true, "LTC": true, "MATIC": true, "ATOM": true,
 }
 
+func quoteSymbols(sym string) []string {
+	if cryptoUSD[sym] && !strings.Contains(sym, "-") {
+		return []string{sym + "-USD", sym}
+	}
+	return []string{sym}
+}
+
 func (e *Engine) evalTicker(ctx context.Context, body string) []Result {
 	sym, shares, ok := parseTickerQuery(body)
 	if !ok {
 		return nil
 	}
-	q, err := e.quote(ctx, sym)
-	if err != nil {
-		if cryptoUSD[sym] && !strings.Contains(sym, "-") {
-			q, err = e.quote(ctx, sym+"-USD")
+	var q quote
+	var err error
+	for _, candidate := range quoteSymbols(sym) {
+		q, err = e.quote(ctx, candidate)
+		if err == nil {
+			break
 		}
 	}
 	if err != nil {
