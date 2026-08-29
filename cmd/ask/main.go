@@ -6,10 +6,16 @@ import (
 	"os"
 	"strings"
 
+	"gioui.org/app"
 	"github.com/allanjorch/ask/internal/eval"
 	"github.com/allanjorch/ask/internal/ui"
-	"gioui.org/app"
 )
+
+// Wayland app_id / X11 class. The binary stays `ask`; the window identity is
+// namespaced so it cannot collide with another short-named app.
+func init() {
+	app.ID = "com.github.allanjorch.ask"
+}
 
 func main() {
 	if len(os.Args) > 1 {

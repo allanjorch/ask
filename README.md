@@ -71,14 +71,16 @@ The UI is [Gio](https://gioui.org). On Omarchy it reads `~/.local/state/omarchy/
 Bind Super+A and float the window. In `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + A", "Ask", { launch = "ask", focus = "^ask$" })
+o.bind("SUPER + A", "Ask", { launch = "ask", focus = "^com.github.allanjorch.ask$" })
 ```
 
 In `~/.config/hypr/hyprland.lua`:
 
 ```lua
-o.window("ask", { float = true, center = true, rounding = 12 })
+o.window("com.github.allanjorch.ask", { float = true, center = true, rounding = 12 })
 ```
+
+The command is `ask`. The window class is `com.github.allanjorch.ask`, so Hyprland can tell it apart from anything else named Ask. Same namespace for later apps: `com.github.allanjorch.<name>`.
 
 Then `hyprctl reload`. Super+A opens Ask, Escape puts it away.
 
